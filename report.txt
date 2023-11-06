@@ -1,0 +1,39 @@
+# Chessboard Diagram Assignment Report
+
+[Replace the square-bracketed text with your own text. *Leave everything else unchanged.* 
+Note, the reports are parsed to check word limits, etc. Changing the format may cause 
+the parsing to fail.]
+
+## Feature Extraction (Max 200 Words)
+
+[Describe and justify the design of your feature extraction. Note, feature extraction 
+includes all the steps that you have taken to produce the 20-dimensional feature vector
+starting from the initial image of the puzzle.]
+
+## Square Classifier (Max 200 Words)
+
+[Describe and justify the design of your classifier and any associated classifier training
+stage.]
+
+## Full-board Classification (Max 200 Words)
+
+[Describe the approach that you have taken for classifying the full board.]
+
+## Performance
+
+My percentage correctness scores (to 1 decimal place) for the development data are as follows.
+
+High quality data:
+
+- Percentage Squares Correct: [Insert percentage here, e.g. 98.1% - remove brackets]
+- Percentage Boards Correct: [Insert percentage here, e.g. 98.0% - remove brackets]
+
+Noisy data:
+
+- Percentage Squares Correct: [Insert percentage here, e.g. 83.3% - remove brackets]
+- Percentage Boards Correct: [Insert percentage here, e.g. 58.1% - remove brackets]
+
+## Other information (Optional, Max 100 words)
+
+[Optional: highlight any significant aspects of your system that are NOT covered in the
+sections above]
