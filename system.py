@@ -1,13 +1,18 @@
-"""Baseline classification system.
+"""
+PCA & KNN Chessboard classification system.
 
 Solution outline for the COM2004/3004 assignment.
+
+Name:           Arnav Kolhe
+Student ID:     220131948
 
 This solution will run but the dimensionality reduction and
 the classifier are not doing anything useful, so it will
 produce a very poor result.
 
-version: v1.0
+version: v1.1
 """
+from collections import Counter
 from typing import List
 
 import scipy
@@ -17,6 +22,9 @@ from scipy.spatial import distance
 
 N_DIMENSIONS = 10
 K_NEAREST = 5
+
+BOARD_SIZE = 64
+ROW_SIZE = 8
 
 PIECES = {".": 64, "K": 1, "Q": 1, "B": 2, "N": 2, "R": 2, "P": 8, "k": 1, "q": 1, "b": 2, "n": 2, "r": 2, "p": 8}
 def classify(train: np.ndarray, train_labels: np.ndarray, test: np.ndarray) -> List[str]:
@@ -59,11 +67,77 @@ def classify(train: np.ndarray, train_labels: np.ndarray, test: np.ndarray) -> L
 # below are provided as examples and will produce a result, but the score will be low.
 
 
-def reduce_dimensions(data: np.ndarray, model: dict) -> np.ndarray:
-    """Reduce the dimensionality of a set of feature vectors down to N_DIMENSIONS.
+# def reduce_dimensions(data: np.ndarray, model: dict) -> np.ndarray:
+#     """Reduce the dimensionality of a set of feature vectors down to N_DIMENSIONS.
 
-    The feature vectors are stored in the rows of 2-D array data, (i.e., a data matrix).
-    The dummy implementation below simply returns the first N_DIMENSIONS columns.
+#     The feature vectors are stored in the rows of 2-D array data, (i.e., a data matrix).
+#     The dummy implementation below simply returns the first N_DIMENSIONS columns.
+
+#     Args:
+#         data (np.ndarray): The feature vectors to reduce.
+#         model (dict): A dictionary storing the model data that may be needed.
+
+#     Returns:
+#         np.ndarray: The reduced feature vectors.
+#     """
+
+#     # reduced_data = data[:, 0:N_DIMENSIONS]
+#     reduced_data = np.dot((data - np.mean(data, axis=0)), model["eigenvectors"])
+
+#     # Subtract the mean
+#     # data -= np.mean(data, axis=0)
+
+#     # Compute the SVD
+#     # U, _, vt = np.linalg.svd(data, full_matrices=False)
+
+#     # Project the data onto the first N_DIMENSIONS singular vectors
+#     # reduced_data = U[:,:N_DIMENSIONS]
+
+#     return reduced_data
+
+
+# def process_training_data(fvectors_train: np.ndarray, labels_train: np.ndarray) -> dict:
+#     """Process the labeled training data and return model parameters stored in a dictionary.
+
+#     Note, the contents of the dictionary are up to you, and it can contain any serializable
+#     data types stored under any keys. This dictionary will be passed to the classifier.
+
+#     Args:
+#         fvectors_train (np.ndarray): training data feature vectors stored as rows.
+#         labels_train (np.ndarray): the labels corresponding to the feature vectors.
+
+#     Returns:
+#         dict: a dictionary storing the model data.
+#     """
+
+#     # The design of this is entirely up to you.
+#     # Note, if you are using an instance based approach, e.g. a nearest neighbour,
+#     # then the model will need to store the dimensionally-reduced training data and labels.
+
+
+
+#     # PCA
+#     model = {}
+#     model["labels_train"] = labels_train.tolist()
+
+#     covariance_matrix = np.cov(fvectors_train, ddof=False, rowvar=False)
+#     N = covariance_matrix.shape[0]
+
+#     _, eigenvectors = scipy.linalg.eigh(covariance_matrix, eigvals=(N - N_DIMENSIONS, N - 1))
+
+#     eigenvectors = np.fliplr(eigenvectors)
+
+#     model["eigenvectors"] = eigenvectors.tolist()
+
+#     # print(model)
+
+#     fvectors_train_reduced = reduce_dimensions(fvectors_train, model)
+#     model["fvectors_train"] = fvectors_train_reduced.tolist()
+
+#     return model
+
+def reduce_dimensions(data: np.ndarray, model: dict) -> np.ndarray:
+    """Reduce the dimensionality of a set of feature vectors down to N_DIMENSIONS using LDA.
 
     Args:
         data (np.ndarray): The feature vectors to reduce.
@@ -72,27 +146,14 @@ def reduce_dimensions(data: np.ndarray, model: dict) -> np.ndarray:
     Returns:
         np.ndarray: The reduced feature vectors.
     """
-
-    # reduced_data = data[:, 0:N_DIMENSIONS]
-    reduced_data = np.dot((data - np.mean(data, axis=0)), model["eigenvectors"])
-
-    # Subtract the mean
-    # data -= np.mean(data, axis=0)
-
-    # Compute the SVD
-    # U, _, vt = np.linalg.svd(data, full_matrices=False)
-
-    # Project the data onto the first N_DIMENSIONS singular vectors
-    # reduced_data = U[:,:N_DIMENSIONS]
-
-    return reduced_data
+    mean_vectors = model["mean_vectors"]
+    W = model["W"]
+    data_lda = np.dot(data - mean_vectors, W)
+    return data_lda
 
 
 def process_training_data(fvectors_train: np.ndarray, labels_train: np.ndarray) -> dict:
-    """Process the labeled training data and return model parameters stored in a dictionary.
-
-    Note, the contents of the dictionary are up to you, and it can contain any serializable
-    data types stored under any keys. This dictionary will be passed to the classifier.
+    """Process the labeled training data and return model parameters stored in a dictionary using LDA.
 
     Args:
         fvectors_train (np.ndarray): training data feature vectors stored as rows.
@@ -101,27 +162,39 @@ def process_training_data(fvectors_train: np.ndarray, labels_train: np.ndarray) 
     Returns:
         dict: a dictionary storing the model data.
     """
-
-    # The design of this is entirely up to you.
-    # Note, if you are using an instance based approach, e.g. a nearest neighbour,
-    # then the model will need to store the dimensionally-reduced training data and labels.
-
-
-
-    # PCA
     model = {}
     model["labels_train"] = labels_train.tolist()
 
-    covariance_matrix = np.cov(fvectors_train, ddof=False, rowvar=False)
-    N = covariance_matrix.shape[0]
+    classes = np.unique(labels_train)
+    mean_vectors = np.zeros((len(classes), fvectors_train.shape[1]))
+    for i, cl in enumerate(classes):
+        mean_vectors[i, :] = np.mean(fvectors_train[labels_train==cl, :], axis=0)
+    model["mean_vectors"] = mean_vectors
 
-    _, eigenvectors = scipy.linalg.eigh(covariance_matrix, eigvals=(N - N_DIMENSIONS, N - 1))
+    S_W = np.zeros((fvectors_train.shape[1], fvectors_train.shape[1]))
+    for cl, mv in zip(classes, mean_vectors):
+        class_sc_mat = np.zeros((fvectors_train.shape[1], fvectors_train.shape[1]))
+        for row in fvectors_train[labels_train == cl]:
+            row, mv = row.reshape(fvectors_train.shape[1], 1), mv.reshape(fvectors_train.shape[1], 1)
+            class_sc_mat += (row-mv).dot((row-mv).T)
+        print("hello")
+        S_W += class_sc_mat
 
-    eigenvectors = np.fliplr(eigenvectors)
+    overall_mean = np.mean(fvectors_train, axis=0)
+    S_B = np.zeros((fvectors_train.shape[1], fvectors_train.shape[1]))
+    for i, mean_vec in enumerate(mean_vectors):  
+        n = fvectors_train[labels_train==i+1,:].shape[0]
+        mean_vec = mean_vec.reshape(fvectors_train.shape[1], 1)
+        overall_mean = overall_mean.reshape(fvectors_train.shape[1], 1)
+        S_B += n * (mean_vec - overall_mean).dot((mean_vec - overall_mean).T)
 
-    model["eigenvectors"] = eigenvectors.tolist()
+    eig_vals, eig_vecs = np.linalg.eig(np.linalg.inv(S_W).dot(S_B))
 
-    # print(model)
+    eig_pairs = [(np.abs(eig_vals[i]), eig_vecs[:,i]) for i in range(len(eig_vals))]
+    eig_pairs = sorted(eig_pairs, key=lambda k: k[0], reverse=True)
+
+    W = np.hstack([eig_pairs[i][1].reshape(fvectors_train.shape[1], 1) for i in range(0, N_DIMENSIONS)])
+    model["W"] = W
 
     fvectors_train_reduced = reduce_dimensions(fvectors_train, model)
     model["fvectors_train"] = fvectors_train_reduced.tolist()
@@ -214,7 +287,7 @@ def classify_boards(fvectors_test: np.ndarray, model: dict) -> List[str]:
             nearest_labels = labels_train[indices]
 
             # Calculate the weighted count of each class using the defined piece counts
-            if i < 8 or i > 55:
+            if i < ROW_SIZE or i >= BOARD_SIZE - ROW_SIZE:
                 nearest_labels = nearest_labels[nearest_labels != "p"]
                 nearest_labels = nearest_labels[nearest_labels != "P"]
 
@@ -247,17 +320,26 @@ def classify_boards(fvectors_test: np.ndarray, model: dict) -> List[str]:
                 nearest_labels_list = labels_train[indices].tolist()
 
                 # print(curr_pieces_labels)
-                curr_pieces_labels.append(list(zip(labels_train[indices], indices)))
+                # curr_pieces_labels.append(list(zip(labels_train[indices], indices)))
+                curr_pieces_labels.append(list(zip(nearest_labels_list, distances[indices])))
                 # predicted_label = max(nearest_labels_list, key=nearest_labels_list.count)
                 # curr_pieces_labels[positions.index(pos)] = nearest_labels_list
 
             sorted_labels = sorted(curr_pieces_labels, key=lambda x: x[1])
 
+            flat_labels = [label for sublist in curr_pieces_labels for label, _ in sublist]
+
+            label_counts = Counter(flat_labels)
+
+            most_common_labels = [label for label, _ in label_counts.most_common(PIECES[piece])]
+
+            for i, label in enumerate(most_common_labels):
+                labels_board[positions[i]] = label
+
             # print(f"{piece} {positions}")
             # for piece in sorted_labels:
-
-            # print(max(sublist[-1][-1] for sublist in sorted_labels))
-            # print([sorted(sublist, key=lambda x: x[1], reverse=True)[1] for sublist in sorted_labels])
+            print(max(sublist[-1][-1] for sublist in sorted_labels))
+            print([sorted(sublist, key=lambda x: x[1], reverse=True)[1] for sublist in sorted_labels])
 
             # print(sorted_labels)
 
