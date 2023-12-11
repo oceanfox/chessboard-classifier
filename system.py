@@ -20,6 +20,8 @@ import numpy as np
 
 from scipy.spatial import distance
 
+from scipy.ndimage import gaussian_filter
+
 N_DIMENSIONS = 10
 K_NEAREST = 5
 
@@ -66,138 +68,55 @@ def classify(train: np.ndarray, train_labels: np.ndarray, test: np.ndarray) -> L
 # list of parameters and return types) must not be changed. The trivial implementations
 # below are provided as examples and will produce a result, but the score will be low.
 
-
-# def reduce_dimensions(data: np.ndarray, model: dict) -> np.ndarray:
-#     """Reduce the dimensionality of a set of feature vectors down to N_DIMENSIONS.
-
-#     The feature vectors are stored in the rows of 2-D array data, (i.e., a data matrix).
-#     The dummy implementation below simply returns the first N_DIMENSIONS columns.
-
-#     Args:
-#         data (np.ndarray): The feature vectors to reduce.
-#         model (dict): A dictionary storing the model data that may be needed.
-
-#     Returns:
-#         np.ndarray: The reduced feature vectors.
-#     """
-
-#     # reduced_data = data[:, 0:N_DIMENSIONS]
-#     reduced_data = np.dot((data - np.mean(data, axis=0)), model["eigenvectors"])
-
-#     # Subtract the mean
-#     # data -= np.mean(data, axis=0)
-
-#     # Compute the SVD
-#     # U, _, vt = np.linalg.svd(data, full_matrices=False)
-
-#     # Project the data onto the first N_DIMENSIONS singular vectors
-#     # reduced_data = U[:,:N_DIMENSIONS]
-
-#     return reduced_data
-
-
-# def process_training_data(fvectors_train: np.ndarray, labels_train: np.ndarray) -> dict:
-#     """Process the labeled training data and return model parameters stored in a dictionary.
-
-#     Note, the contents of the dictionary are up to you, and it can contain any serializable
-#     data types stored under any keys. This dictionary will be passed to the classifier.
-
-#     Args:
-#         fvectors_train (np.ndarray): training data feature vectors stored as rows.
-#         labels_train (np.ndarray): the labels corresponding to the feature vectors.
-
-#     Returns:
-#         dict: a dictionary storing the model data.
-#     """
-
-#     # The design of this is entirely up to you.
-#     # Note, if you are using an instance based approach, e.g. a nearest neighbour,
-#     # then the model will need to store the dimensionally-reduced training data and labels.
-
-
-
-#     # PCA
-#     model = {}
-#     model["labels_train"] = labels_train.tolist()
-
-#     covariance_matrix = np.cov(fvectors_train, ddof=False, rowvar=False)
-#     N = covariance_matrix.shape[0]
-
-#     _, eigenvectors = scipy.linalg.eigh(covariance_matrix, eigvals=(N - N_DIMENSIONS, N - 1))
-
-#     eigenvectors = np.fliplr(eigenvectors)
-
-#     model["eigenvectors"] = eigenvectors.tolist()
-
-#     # print(model)
-
-#     fvectors_train_reduced = reduce_dimensions(fvectors_train, model)
-#     model["fvectors_train"] = fvectors_train_reduced.tolist()
-
-#     return model
-
 def reduce_dimensions(data: np.ndarray, model: dict) -> np.ndarray:
-    """Reduce the dimensionality of a set of feature vectors down to N_DIMENSIONS using LDA.
+    # Apply PCA
+    pca_data = np.dot((data - np.mean(data, axis=0)), model["pca_eigenvectors"])
 
-    Args:
-        data (np.ndarray): The feature vectors to reduce.
-        model (dict): A dictionary storing the model data that may be needed.
+    # Apply LDA
+    lda_data = np.dot((pca_data - np.mean(pca_data, axis=0)), model["lda_eigenvectors"])
 
-    Returns:
-        np.ndarray: The reduced feature vectors.
-    """
-    mean_vectors = model["mean_vectors"]
-    W = model["W"]
-    data_lda = np.dot(data - mean_vectors, W)
-    return data_lda
-
+    return lda_data
 
 def process_training_data(fvectors_train: np.ndarray, labels_train: np.ndarray) -> dict:
-    """Process the labeled training data and return model parameters stored in a dictionary using LDA.
+    N_DIMENSIONS_PCA = 60
+    N_DIMENSIONS_LDA = 10
 
-    Args:
-        fvectors_train (np.ndarray): training data feature vectors stored as rows.
-        labels_train (np.ndarray): the labels corresponding to the feature vectors.
-
-    Returns:
-        dict: a dictionary storing the model data.
-    """
     model = {}
     model["labels_train"] = labels_train.tolist()
 
-    classes = np.unique(labels_train)
-    mean_vectors = np.zeros((len(classes), fvectors_train.shape[1]))
-    for i, cl in enumerate(classes):
-        mean_vectors[i, :] = np.mean(fvectors_train[labels_train==cl, :], axis=0)
-    model["mean_vectors"] = mean_vectors
+    # PCA
+    covariance_matrix = np.cov(fvectors_train, ddof=False, rowvar=False)
+    N = covariance_matrix.shape[0]
 
-    S_W = np.zeros((fvectors_train.shape[1], fvectors_train.shape[1]))
-    for cl, mv in zip(classes, mean_vectors):
-        class_sc_mat = np.zeros((fvectors_train.shape[1], fvectors_train.shape[1]))
-        for row in fvectors_train[labels_train == cl]:
-            row, mv = row.reshape(fvectors_train.shape[1], 1), mv.reshape(fvectors_train.shape[1], 1)
-            class_sc_mat += (row-mv).dot((row-mv).T)
-        print("hello")
-        S_W += class_sc_mat
+    _, pca_eigenvectors = scipy.linalg.eigh(covariance_matrix, eigvals=(N - N_DIMENSIONS_PCA, N - 1))
+    pca_eigenvectors = np.fliplr(pca_eigenvectors)
+    model["pca_eigenvectors"] = pca_eigenvectors.tolist()
 
-    overall_mean = np.mean(fvectors_train, axis=0)
-    S_B = np.zeros((fvectors_train.shape[1], fvectors_train.shape[1]))
-    for i, mean_vec in enumerate(mean_vectors):  
-        n = fvectors_train[labels_train==i+1,:].shape[0]
-        mean_vec = mean_vec.reshape(fvectors_train.shape[1], 1)
-        overall_mean = overall_mean.reshape(fvectors_train.shape[1], 1)
-        S_B += n * (mean_vec - overall_mean).dot((mean_vec - overall_mean).T)
+    pca_data = np.dot((fvectors_train - np.mean(fvectors_train, axis=0)), pca_eigenvectors)
 
-    eig_vals, eig_vecs = np.linalg.eig(np.linalg.inv(S_W).dot(S_B))
+    # LDA
+    mean_vectors = []
+    for label in np.unique(labels_train):
+        mean_vectors.append(np.mean(pca_data[labels_train == label], axis=0))
 
-    eig_pairs = [(np.abs(eig_vals[i]), eig_vecs[:,i]) for i in range(len(eig_vals))]
-    eig_pairs = sorted(eig_pairs, key=lambda k: k[0], reverse=True)
+    mean_vectors = np.array(mean_vectors)
+    overall_mean = np.mean(pca_data, axis=0)
 
-    W = np.hstack([eig_pairs[i][1].reshape(fvectors_train.shape[1], 1) for i in range(0, N_DIMENSIONS)])
-    model["W"] = W
+    scatter_within = np.zeros((pca_data.shape[1], pca_data.shape[1]))
 
-    fvectors_train_reduced = reduce_dimensions(fvectors_train, model)
-    model["fvectors_train"] = fvectors_train_reduced.tolist()
+    for label in np.unique(labels_train):
+        scatter_within += np.cov(pca_data[labels_train == label], rowvar=False)
+
+    scatter_between = np.cov(mean_vectors, rowvar=False) - np.outer(overall_mean, overall_mean)
+
+    _, lda_eigenvectors = scipy.linalg.eigh(scipy.linalg.pinv(scatter_within).dot(scatter_between), eigvals=(pca_data.shape[1] - N_DIMENSIONS_LDA, pca_data.shape[1] - 1))
+    lda_eigenvectors = np.fliplr(lda_eigenvectors)
+
+    model["lda_eigenvectors"] = lda_eigenvectors.tolist()
+
+    lda_data = np.dot(pca_data, lda_eigenvectors)
+
+    model["fvectors_train"] = lda_data.tolist()
 
     return model
 
@@ -217,6 +136,7 @@ def images_to_feature_vectors(images: List[np.ndarray]) -> np.ndarray:
     n_features = h * w
     fvectors = np.empty((len(images), n_features))
     for i, image in enumerate(images):
+        image = gaussian_filter(image, sigma=1)
         fvectors[i, :] = image.reshape(1, n_features)
 
     return fvectors
@@ -338,8 +258,8 @@ def classify_boards(fvectors_test: np.ndarray, model: dict) -> List[str]:
 
             # print(f"{piece} {positions}")
             # for piece in sorted_labels:
-            print(max(sublist[-1][-1] for sublist in sorted_labels))
-            print([sorted(sublist, key=lambda x: x[1], reverse=True)[1] for sublist in sorted_labels])
+            # print(max(sublist[-1][-1] for sublist in sorted_labels))
+            # print([sorted(sublist, key=lambda x: x[1], reverse=True)[1] for sublist in sorted_labels])
 
             # print(sorted_labels)
 
