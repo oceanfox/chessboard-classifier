@@ -12,18 +12,17 @@ produce a very poor result.
 
 version: v1.1
 """
-from collections import Counter
+from collections import Counter, defaultdict
 from typing import List
 
 import scipy
 import numpy as np
 
 from scipy.spatial import distance
-
 from scipy.ndimage import gaussian_filter
 
 N_DIMENSIONS = 10
-K_NEAREST = 5
+K_NEAREST = 4
 
 BOARD_SIZE = 64
 ROW_SIZE = 8
@@ -60,7 +59,72 @@ def classify(train: np.ndarray, train_labels: np.ndarray, test: np.ndarray) -> L
     return predictions
 
 
-# The functions below must all be fprovided in your solution. Think of them
+# CLASSIFICATION METHODS ------------------------------------------------------------------------------------------------------------
+def get_nearest_labels_and_distances(train: np.ndarray, train_labels: np.ndarray, test: np.ndarray):
+    distances = distance.cdist(train, test.reshape(1,-1), 'euclidean').flatten()
+    indices = np.argsort(distances)[:K_NEAREST]
+    nearest_labels = train_labels[indices]
+    nearest_distances = distances[indices]
+
+    return nearest_labels, nearest_distances
+
+def verify_piece_numbers(to_reeval, labels_board):
+    for label, count in PIECES.items():
+        if labels_board.count(label) > count:
+            for i, square in enumerate(labels_board):
+                if square == label:
+                    to_reeval[square].append(i)
+    return to_reeval
+
+def remove_pawns(i, nearest_labels):
+    # Remove pawns from the first and last rows
+    if i < ROW_SIZE or i >= BOARD_SIZE - ROW_SIZE:
+        nearest_labels = nearest_labels[nearest_labels != "p"]
+        nearest_labels = nearest_labels[nearest_labels != "P"]
+    return nearest_labels
+
+def weigh_classes_from_distances(nearest_labels, nearest_distances):
+    class_weights = defaultdict(float)
+
+    # Calculate weighted frequency of each label
+    for label, dist in zip(nearest_labels, nearest_distances):
+        # Calculate weights from distances, you can use any function for weights
+        # Here, we use the inverse of distance
+        weight = 1.0 / dist if dist != 0 else 1.0
+        class_weights[label] += weight
+    return class_weights
+
+# END CLASSIFICATION METHODS ------------------------------------------------------------------------------------------------------------
+
+# PCA & LDA METHODS ------------------------------------------------------------------------------------------------------------
+
+def run_pca(data: np.ndarray, eigenvectors: np.ndarray) -> np.ndarray:
+    """
+    Run PCA on the input data using the PCA eigenvectors stored in the model.
+
+    Parameters:
+        data (np.ndarray): The input data to be dimensionally reduced.
+        model (dict): A dictionary containing the PCA eigenvectors.
+
+    Returns:
+        np.ndarray: The dimensionally reduced data.
+    """
+    return np.dot((data - np.mean(data, axis=0)), eigenvectors)
+
+def run_lda(data: np.ndarray, eigenvectors: np.ndarray) -> np.ndarray:
+    """
+    Run LDA on the input data using the LDA eigenvectors stored in the model.
+
+    Parameters:
+        data (np.ndarray): The input data to be dimensionally reduced.
+        model (dict): A dictionary containing the LDA eigenvectors.
+
+    Returns:
+        np.ndarray: The dimensionally reduced data.
+    """
+    return np.dot(data, eigenvectors)
+
+# The functions below must all be provided in your solution. Think of them
 # as an API that it used by the train.py and evaluate.py programs.
 # If you don't provide them, then the train.py and evaluate.py programs will not run.
 #
@@ -69,53 +133,94 @@ def classify(train: np.ndarray, train_labels: np.ndarray, test: np.ndarray) -> L
 # below are provided as examples and will produce a result, but the score will be low.
 
 def reduce_dimensions(data: np.ndarray, model: dict) -> np.ndarray:
+    """
+    Reduce the dimensions of the input data using PCA and LDA.
+
+    Parameters:
+        data (np.ndarray): The input data to be dimensionally reduced.
+        model (dict): A dictionary containing the PCA and LDA models.
+
+    Returns:
+        np.ndarray: The dimensionally reduced data.
+    """
+
     # Apply PCA
-    pca_data = np.dot((data - np.mean(data, axis=0)), model["pca_eigenvectors"])
+    pca_data = run_pca((data - np.mean(data, axis=0)), np.array(model["pca_eigenvectors"]))
 
     # Apply LDA
-    lda_data = np.dot((pca_data - np.mean(pca_data, axis=0)), model["lda_eigenvectors"])
+    lda_data = run_lda((pca_data - np.mean(pca_data, axis=0)), np.array(model["lda_eigenvectors"]))
 
     return lda_data
 
 def process_training_data(fvectors_train: np.ndarray, labels_train: np.ndarray) -> dict:
-    N_DIMENSIONS_PCA = 60
-    N_DIMENSIONS_LDA = 10
+    """
+    Process the training data to extract features using PCA and LDA.
+
+    Args:
+        fvectors_train (np.ndarray): The feature vectors of the training data.
+        labels_train (np.ndarray): The labels of the training data.
+
+    Returns:
+        dict: A dictionary containing the processed training data, including the labels, PCA eigenvectors,
+              LDA eigenvectors, and the transformed feature vectors.
+    """
+    # choose the number of dimensions for PCA and LDA
+    N_DIMENSIONS_PCA = 50
+    N_DIMENSIONS_LDA = N_DIMENSIONS
 
     model = {}
     model["labels_train"] = labels_train.tolist()
 
+    
     # PCA
+    # calculate the covariance matrix of the training data
     covariance_matrix = np.cov(fvectors_train, ddof=False, rowvar=False)
-    N = covariance_matrix.shape[0]
 
+    # calculate the eigenvectors of the covariance matrix
+    N = covariance_matrix.shape[0]
     _, pca_eigenvectors = scipy.linalg.eigh(covariance_matrix, eigvals=(N - N_DIMENSIONS_PCA, N - 1))
+
+    # flip the order of the eigenvectors and add to the model
     pca_eigenvectors = np.fliplr(pca_eigenvectors)
     model["pca_eigenvectors"] = pca_eigenvectors.tolist()
 
-    pca_data = np.dot((fvectors_train - np.mean(fvectors_train, axis=0)), pca_eigenvectors)
+    # project the training data using the eigenvectors
+    pca_data = run_pca((fvectors_train - np.mean(fvectors_train, axis=0)), pca_eigenvectors)
 
     # LDA
+    # calculate the mean vectors for each class label
     mean_vectors = []
     for label in np.unique(labels_train):
         mean_vectors.append(np.mean(pca_data[labels_train == label], axis=0))
 
+    # convert to numpy array
     mean_vectors = np.array(mean_vectors)
+
+    # calculate the overall mean
     overall_mean = np.mean(pca_data, axis=0)
 
+    # calculate the within-class and between-class scatter matrices
     scatter_within = np.zeros((pca_data.shape[1], pca_data.shape[1]))
 
+    # for each class label, calculate the within-class scatter matrix (S_W)
     for label in np.unique(labels_train):
         scatter_within += np.cov(pca_data[labels_train == label], rowvar=False)
 
+    # calculate the between-class scatter matrix (S_B)
     scatter_between = np.cov(mean_vectors, rowvar=False) - np.outer(overall_mean, overall_mean)
 
-    _, lda_eigenvectors = scipy.linalg.eigh(scipy.linalg.pinv(scatter_within).dot(scatter_between), eigvals=(pca_data.shape[1] - N_DIMENSIONS_LDA, pca_data.shape[1] - 1))
+    # calculate the eigenvectors of the matrix (S_W^-1 * S_B)
+    _, lda_eigenvectors = scipy.linalg.eigh(np.linalg.pinv(scatter_within).dot(scatter_between), eigvals=(pca_data.shape[1] - N_DIMENSIONS_LDA, pca_data.shape[1] - 1))
+    
+    # flip the order of the eigenvectors and add to the model
     lda_eigenvectors = np.fliplr(lda_eigenvectors)
 
+    # add the eigenvectors for lda to the model
     model["lda_eigenvectors"] = lda_eigenvectors.tolist()
 
-    lda_data = np.dot(pca_data, lda_eigenvectors)
+    lda_data = run_lda(pca_data, lda_eigenvectors)
 
+    # add the transformed feature vectors to the model
     model["fvectors_train"] = lda_data.tolist()
 
     return model
@@ -160,116 +265,80 @@ def classify_squares(fvectors_test: np.ndarray, model: dict) -> List[str]:
     # Get some data out of the model. It's up to you what you've stored in here
     fvectors_train = np.array(model["fvectors_train"])
     labels_train = np.array(model["labels_train"])
+    test = np.array(fvectors_test)
+    
+    predictions = []
 
-    # Call the classify function.
-    labels = classify(fvectors_train, labels_train, fvectors_test)
+    for test_instance in test:
+        # Calculate the distance to each training sample
+        nearest_labels, nearest_distances = get_nearest_labels_and_distances(fvectors_train, labels_train, test_instance)
+        
+        # Calculate weighted frequency of each label
+        class_weights = weigh_classes_from_distances(nearest_labels, nearest_distances)
 
-    return labels
+        
+        # Get the label with the highest weighted frequency
+        predicted_label = max(class_weights.keys(), key=(lambda key: class_weights[key]))
+        predictions.append(predicted_label)
 
+    return predictions
 
-def classify_boards(fvectors_test: np.ndarray, model: dict) -> List[str]:
-    """Run classifier on a array of image feature vectors presented in 'board order'.
-
-    The feature vectors for each square are guaranteed to be in 'board order', i.e.
-    you can infer the position on the board from the position of the feature vector
-    in the feature vector array.
-
-    In the dummy code below, we just re-use the simple classify_squares function,
-    i.e. we ignore the ordering.
-
-    Args:
-        fvectors_test (np.ndarray): An array in which feature vectors are stored as rows.
-        model (dict): A dictionary storing the model data.
-
-    Returns:
-        list[str]: A list of one-character strings representing the labels for each square.
-    """
-
+def classify_boards(fvectors_test:np.ndarray, model: dict) -> List[str]:
     fvectors_train = np.array(model["fvectors_train"])
     labels_train = np.array(model["labels_train"])
 
     labels = []
+    
 
-
-    n = 64
-
-    for i in range(0, len(fvectors_test), n):
-        fvectors_test_board = fvectors_test[i:i + n]
-
-        to_reeval = {".": [], "K": [], "Q": [], "B": [], "N": [], "R": [], "P": [], "k": [], "q": [], "b": [], "n": [], "r": [], "p": []}
-
+    for i in range(0, len(fvectors_test), BOARD_SIZE):
+        fvectors_test_board = fvectors_test[i:i + BOARD_SIZE]
+        to_reeval = defaultdict(list)
         labels_board = []
 
-        for i, square in enumerate(fvectors_test_board):
-            # Calculate the distance to each training sample
-            distances = distance.cdist(fvectors_train, square.reshape(1, -1), 'euclidean').flatten()
-            indices = np.argsort(distances)[:K_NEAREST]
-            nearest_labels = labels_train[indices]
+        for pos, square in enumerate(fvectors_test_board):
+            nearest_labels, nearest_distances = get_nearest_labels_and_distances(fvectors_train, labels_train, square)
 
-            # Calculate the weighted count of each class using the defined piece counts
-            if i < ROW_SIZE or i >= BOARD_SIZE - ROW_SIZE:
-                nearest_labels = nearest_labels[nearest_labels != "p"]
-                nearest_labels = nearest_labels[nearest_labels != "P"]
+            nearest_labels = remove_pawns(pos, nearest_labels)
 
-            nearest_labels_list = nearest_labels.tolist()
-
-            # for label in nearest_labels:
-            #     if label in class_weights:
-            #         class_weights[label] += PIECES.get(label, 0)
-            #     else:
-            #         class_weights[label] = PIECES.get(label, 0)
+            # Calculate the weighted count of each class
+            class_weights = weigh_classes_from_distances(nearest_labels, nearest_distances)
 
             # Choose the label with the maximum weighted count
-            predicted_label = max(nearest_labels_list, key=nearest_labels_list.count)
-
+            predicted_label = "." if (not class_weights) else max(class_weights.keys(), key=(lambda key: class_weights[key]))
             labels_board.append(predicted_label)
 
-        for label, count in PIECES.items():
-            if labels_board.count(label) > count:
-                for i, square in enumerate(labels_board):
-                    if square == label:
-                        to_reeval[square].append(i)
+        to_reeval = verify_piece_numbers(to_reeval, labels_board)
 
-        for piece, positions in to_reeval.items():
+        for positions in to_reeval.values():
             if len(positions) == 0:
                 continue
             curr_pieces_labels = []
             for pos in positions:
-                distances = distance.cdist(fvectors_train, fvectors_test_board[pos].reshape(1, -1), 'euclidean').flatten()
-                indices = np.argsort(distances)[:K_NEAREST]
-                nearest_labels_list = labels_train[indices].tolist()
+                nearest_labels, nearest_distances = get_nearest_labels_and_distances(fvectors_train, labels_train, fvectors_test_board[pos])
 
-                # print(curr_pieces_labels)
-                # curr_pieces_labels.append(list(zip(labels_train[indices], indices)))
-                curr_pieces_labels.append(list(zip(nearest_labels_list, distances[indices])))
-                # predicted_label = max(nearest_labels_list, key=nearest_labels_list.count)
-                # curr_pieces_labels[positions.index(pos)] = nearest_labels_list
+                # Calculate the weighted count of each class
+                class_weights = weigh_classes_from_distances(nearest_labels, nearest_distances)
 
-            sorted_labels = sorted(curr_pieces_labels, key=lambda x: x[1])
+                nearest_labels = remove_pawns(pos, nearest_labels)
 
-            flat_labels = [label for sublist in curr_pieces_labels for label, _ in sublist]
+                if len(class_weights.keys()) >= 2:
+                    maximum = max(class_weights.keys(), key=(lambda key: class_weights[key]))
+                    for k, v in class_weights.items(): 
+                        if k != maximum and abs(v - class_weights[maximum]) < 0.1:
+                            class_weights[maximum] = 0
+                            break
+                        
 
-            label_counts = Counter(flat_labels)
+                # Choose the label with the maximum weighted count
+                predicted_label =  "." if (not class_weights) else max(class_weights.keys(), key=(lambda key: class_weights[key]))
+                curr_pieces_labels.append(predicted_label)
 
-            most_common_labels = [label for label, _ in label_counts.most_common(PIECES[piece])]
-
-            for i, label in enumerate(most_common_labels):
+            # Add the reevaluated labels to the board
+            for i, label in enumerate(curr_pieces_labels):
                 labels_board[positions[i]] = label
-
-            # print(f"{piece} {positions}")
-            # for piece in sorted_labels:
-            # print(max(sublist[-1][-1] for sublist in sorted_labels))
-            # print([sorted(sublist, key=lambda x: x[1], reverse=True)[1] for sublist in sorted_labels])
-
-            # print(sorted_labels)
-
-
 
         labels.append(labels_board)
 
     labels = np.array(labels).reshape(1600)
 
-    return labels
-
-
-    # return classify_squares(fvectors_test, model)
+    return labels.tolist()
