@@ -1,9 +1,0 @@
-name: ddc
-channels:
-  - defaults
-dependencies:
-  - python
-  - numpy
-  - scipy
-  - pillow
-  - ipykernel

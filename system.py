@@ -6,14 +6,11 @@ Solution outline for the COM2004/3004 assignment.
 Name:           Arnav Kolhe
 Student ID:     220131948
 
-This solution will run but the dimensionality reduction and
-the classifier are not doing anything useful, so it will
-produce a very poor result.
-
 version: v1.1
 """
 from collections import Counter, defaultdict
 from typing import List
+import sys
 
 import scipy
 import numpy as np
@@ -28,6 +25,15 @@ BOARD_SIZE = 64
 ROW_SIZE = 8
 
 PIECES = {".": 64, "K": 1, "Q": 1, "B": 2, "N": 2, "R": 2, "P": 8, "k": 1, "q": 1, "b": 2, "n": 2, "r": 2, "p": 8}
+
+
+def _eigh_slice(matrix: np.ndarray, start: int, end: int):
+    """Run scipy.linalg.eigh using whichever slice argument the current SciPy supports."""
+    try:
+        return scipy.linalg.eigh(matrix, eigvals=(start, end))
+    except TypeError:
+        return scipy.linalg.eigh(matrix, subset_by_index=(start, end))
+
 def classify(train: np.ndarray, train_labels: np.ndarray, test: np.ndarray) -> List[str]:
     """Classify a set of feature vectors using a training set.
 
@@ -99,17 +105,8 @@ def weigh_classes_from_distances(nearest_labels, nearest_distances):
 # PCA & LDA METHODS ------------------------------------------------------------------------------------------------------------
 
 def run_pca(data: np.ndarray, eigenvectors: np.ndarray) -> np.ndarray:
-    """
-    Run PCA on the input data using the PCA eigenvectors stored in the model.
-
-    Parameters:
-        data (np.ndarray): The input data to be dimensionally reduced.
-        model (dict): A dictionary containing the PCA eigenvectors.
-
-    Returns:
-        np.ndarray: The dimensionally reduced data.
-    """
-    return np.dot((data - np.mean(data, axis=0)), eigenvectors)
+    """Project centered data onto the PCA eigenvectors."""
+    return np.dot(data, eigenvectors)
 
 def run_lda(data: np.ndarray, eigenvectors: np.ndarray) -> np.ndarray:
     """
@@ -124,14 +121,6 @@ def run_lda(data: np.ndarray, eigenvectors: np.ndarray) -> np.ndarray:
     """
     return np.dot(data, eigenvectors)
 
-# The functions below must all be provided in your solution. Think of them
-# as an API that it used by the train.py and evaluate.py programs.
-# If you don't provide them, then the train.py and evaluate.py programs will not run.
-#
-# The contents of these functions are up to you but their signatures (i.e., their names,
-# list of parameters and return types) must not be changed. The trivial implementations
-# below are provided as examples and will produce a result, but the score will be low.
-
 def reduce_dimensions(data: np.ndarray, model: dict) -> np.ndarray:
     """
     Reduce the dimensions of the input data using PCA and LDA.
@@ -144,11 +133,16 @@ def reduce_dimensions(data: np.ndarray, model: dict) -> np.ndarray:
         np.ndarray: The dimensionally reduced data.
     """
 
-    # Apply PCA
-    pca_data = run_pca((data - np.mean(data, axis=0)), np.array(model["pca_eigenvectors"]))
+    feature_mean = np.array(model["feature_mean"])
+    pca_mean = np.array(model["pca_mean"])
 
-    # Apply LDA
-    lda_data = run_lda((pca_data - np.mean(pca_data, axis=0)), np.array(model["lda_eigenvectors"]))
+    # Apply PCA using the stored training-set mean
+    centered = data - feature_mean
+    pca_data = run_pca(centered, np.array(model["pca_eigenvectors"]))
+
+    # Apply LDA using the stored PCA-space mean
+    lda_input = pca_data - pca_mean
+    lda_data = run_lda(lda_input, np.array(model["lda_eigenvectors"]))
 
     return lda_data
 
@@ -170,7 +164,6 @@ def process_training_data(fvectors_train: np.ndarray, labels_train: np.ndarray) 
 
     model = {}
     model["labels_train"] = labels_train.tolist()
-
     
     # PCA
     # calculate the covariance matrix of the training data
@@ -178,14 +171,18 @@ def process_training_data(fvectors_train: np.ndarray, labels_train: np.ndarray) 
 
     # calculate the eigenvectors of the covariance matrix
     N = covariance_matrix.shape[0]
-    _, pca_eigenvectors = scipy.linalg.eigh(covariance_matrix, eigvals=(N - N_DIMENSIONS_PCA, N - 1))
+    _, pca_eigenvectors = _eigh_slice(covariance_matrix, N - N_DIMENSIONS_PCA, N - 1)
 
     # flip the order of the eigenvectors and add to the model
     pca_eigenvectors = np.fliplr(pca_eigenvectors)
     model["pca_eigenvectors"] = pca_eigenvectors.tolist()
 
+    feature_mean = np.mean(fvectors_train, axis=0)
+    model["feature_mean"] = feature_mean.tolist()
+
     # project the training data using the eigenvectors
-    pca_data = run_pca((fvectors_train - np.mean(fvectors_train, axis=0)), pca_eigenvectors)
+    centered = fvectors_train - feature_mean
+    pca_data = run_pca(centered, pca_eigenvectors)
 
     # LDA
     # calculate the mean vectors for each class label
@@ -196,21 +193,25 @@ def process_training_data(fvectors_train: np.ndarray, labels_train: np.ndarray) 
     # convert to numpy array
     mean_vectors = np.array(mean_vectors)
 
-    # calculate the overall mean
     overall_mean = np.mean(pca_data, axis=0)
 
     # calculate the within-class and between-class scatter matrices
     scatter_within = np.zeros((pca_data.shape[1], pca_data.shape[1]))
 
-    # for each class label, calculate the within-class scatter matrix (S_W)
+    # (S_W)
     for label in np.unique(labels_train):
         scatter_within += np.cov(pca_data[labels_train == label], rowvar=False)
 
-    # calculate the between-class scatter matrix (S_B)
+    # (S_B)
     scatter_between = np.cov(mean_vectors, rowvar=False) - np.outer(overall_mean, overall_mean)
 
+
     # calculate the eigenvectors of the matrix (S_W^-1 * S_B)
-    _, lda_eigenvectors = scipy.linalg.eigh(np.linalg.pinv(scatter_within).dot(scatter_between), eigvals=(pca_data.shape[1] - N_DIMENSIONS_LDA, pca_data.shape[1] - 1))
+    _, lda_eigenvectors = _eigh_slice(
+        np.linalg.pinv(scatter_within).dot(scatter_between),
+        pca_data.shape[1] - N_DIMENSIONS_LDA,
+        pca_data.shape[1] - 1,
+    )
     
     # flip the order of the eigenvectors and add to the model
     lda_eigenvectors = np.fliplr(lda_eigenvectors)
@@ -218,7 +219,10 @@ def process_training_data(fvectors_train: np.ndarray, labels_train: np.ndarray) 
     # add the eigenvectors for lda to the model
     model["lda_eigenvectors"] = lda_eigenvectors.tolist()
 
-    lda_data = run_lda(pca_data, lda_eigenvectors)
+    pca_mean = np.mean(pca_data, axis=0)
+    model["pca_mean"] = pca_mean.tolist()
+
+    lda_data = run_lda(pca_data - pca_mean, lda_eigenvectors)
 
     # add the transformed feature vectors to the model
     model["fvectors_train"] = lda_data.tolist()
@@ -339,6 +343,6 @@ def classify_boards(fvectors_test:np.ndarray, model: dict) -> List[str]:
 
         labels.append(labels_board)
 
-    labels = np.array(labels).reshape(1600)
+    labels = np.array(labels).reshape(-1)
 
     return labels.tolist()
